@@ -1,0 +1,350 @@
+<?php
+
+function post_init() {
+/*  ctools_include('ajax');
+  $message = ctools_ajax_text_button('ajax post', 'post/nojs/add/test', '');
+  drupal_set_message($message);*/
+}
+
+/**
+ * Implements hook_entity_info().
+ */
+function post_entity_info() {
+  $return['post'] = array(
+    'label' => t('Post'),
+    'entity class' => 'Post',
+    'controller class' => 'PostController',
+    'base table' => 'post',
+    'fieldable' => TRUE,
+    'entity keys' => array(
+        'id' => 'post_id',
+        'bundle' => 'type',
+    ),
+    'bundles' => array(),
+    'bundle keys' => array(
+      'bundle' => 'type',
+    ),
+    'label callback' => 'entity_class_label',
+    'uri callback' => 'entity_class_uri',
+    'creation callback' => 'post_create',
+    'access callback' => 'post_access',
+    'module' => 'post',
+    'admin ui' => array(
+      'path' => 'admin/content/posts',
+      'file' => 'post.admin.inc',
+      'controller class' => 'PostUIController',
+      'menu wildcard' => '%post',
+    ),
+  );
+  $return['post_type'] = array(
+    'label' => t('Post Type'),
+    'entity class' => 'PostType',
+    'controller class' => 'PostTypeController',
+    'base table' => 'post_type',
+    'fieldable' => FALSE,
+    'bundle of' => 'post',
+    'exportable' => TRUE,
+    'entity keys' => array(
+      'id' => 'id',
+      'name' => 'type',
+      'label' => 'label',
+    ),
+    'access callback' => 'post_type_access',
+    'module' => 'post',
+    'admin ui' => array(
+      'path' => 'admin/structure/post_types',
+      'file' => 'post_type.admin.inc',
+      'controller class' => 'PostTypeUIController',
+    ),
+  );
+
+  return $return;
+}
+
+
+/**
+ * Implements hook_entity_info_alter().
+ */
+function post_entity_info_alter(&$entity_info) {
+  foreach (post_get_types() as $type => $info) {
+    $entity_info['post']['bundles'][$type] = array(
+      'label' => $info->label,
+      'admin' => array(
+        'path' => 'admin/structure/post_types/manage/%post_type',
+        'real path' => 'admin/structure/post_types/manage/' . $type,
+        'bundle argument' => 4,
+        'access arguments' => array('administer post types'),
+      ),
+    );
+  }
+}
+  
+
+/**
+ * Implements hook_permission().
+ */
+function post_permission() {
+  // We set up permisssions to manage entity types, manage all entities and the
+  // permissions for each individual entity
+  $permissions = array(
+    'administer post types' => array(
+      'title' => t('Administer post types'),
+      'description' => t('Create and delete fields for post types, and set their permissions.'),
+    ),
+    'administer posts' => array(
+      'title' => t('Administer posts'),
+      'description' => t('Edit and delete all posts'),
+    ),  
+  );
+  
+  //Generate permissions per post 
+  foreach (post_get_types() as $type) {
+    $type_name = check_plain($type->type);
+    $permissions += array(
+      "edit any $type_name post" => array(
+        'title' => t('%type_name: Edit any post', array('%type_name' => $type->label)),
+      ),
+      "view any $type_name post" => array(
+        'title' => t('%type_name: View any post', array('%type_name' => $type->label)),
+      ),
+    );
+  }
+  return $permissions;  
+}
+
+
+/**
+ * Determines whether the given user has access to a post.
+ *
+ * @param $op
+ *   The operation being performed. One of 'view', 'update', 'create', 'delete'
+ *   or just 'edit' (being the same as 'create' or 'update').
+ * @param $post
+ *   Optionally a post or a post type to check access for. If nothing is
+ *   given, access for all posts is determined.
+ * @param $account
+ *   The user to check for. Leave it to NULL to check for the global user.
+ * @return boolean
+ *   Whether access is allowed or not.
+ */
+function post_access($op, $post = NULL, $account = NULL) {
+  if (user_access('administer posts', $account)) {
+    return TRUE;
+  }
+  if (isset($post) && $type_name = $post->type) {
+    $op = ($op == 'view') ? 'view' : 'edit';
+    if (user_access("$op any $type_name post", $account)) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+
+/**
+ * Access callback for the entity API.
+ */
+function post_type_access($op, $type = NULL, $account = NULL) {
+  return user_access('administer post types', $account);
+}
+
+
+/**
+ * Gets an array of all post types, keyed by the type name.
+ *
+ * @param $type_name
+ *   If set, the type with the given name is returned.
+ * @return PostType[]
+ *   Depending whether $type isset, an array of post types or a single one.
+ */
+function post_get_types($type_name = NULL) {
+  // entity_load will get the Entity controller for our post entity and call the load
+  // function of that object - we are loading entities by name here.
+  $types = entity_load_multiple_by_name('post_type', isset($type_name) ? array($type_name) : FALSE);
+  return isset($type_name) ? reset($types) : $types;
+}
+
+
+/**
+ * Menu argument loader; Load a post type by string.
+ *
+ * @param $type
+ *   The machine-readable name of a post type to load.
+ * @return
+ *   A post type array or FALSE if $type does not exist.
+ */
+function post_type_load($type) {
+  return post_get_types($type);
+}
+
+
+/**
+ * Fetch a post object. Make sure that the wildcard you choose 
+ * in the post entity definition fits the function name here.
+ *
+ * @param $post_id
+ *   Integer specifying the post id.
+ * @param $reset
+ *   A boolean indicating that the internal cache should be reset.
+ * @return
+ *   A fully-loaded $post object or FALSE if it cannot be loaded.
+ *
+ * @see post_load_multiple()
+ */
+function post_load($post_id, $reset = FALSE) {
+  $posts = post_load_multiple(array($post_id), array(), $reset);
+  return reset($posts);
+}
+
+
+/**
+ * Load multiple posts based on certain conditions.
+ *
+ * @param $post_ids
+ *   An array of post IDs.
+ * @param $conditions
+ *   An array of conditions to match against the {post} table.
+ * @param $reset
+ *   A boolean indicating that the internal cache should be reset.
+ * @return
+ *   An array of post objects, indexed by post_id.
+ *
+ * @see entity_load()
+ * @see post_load()
+ */
+function post_load_multiple($post_ids = array(), $conditions = array(), $reset = FALSE) {
+  return entity_load('post', $post_ids, $conditions, $reset);
+}
+
+
+/**
+ * Deletes a post.
+ */
+function post_delete(Post $post) {
+  $post->delete();
+}
+
+
+/**
+ * Delete multiple posts.
+ *
+ * @param $post_ids
+ *   An array of post IDs.
+ */
+function post_delete_multiple(array $post_ids) {
+  entity_get_controller('post')->delete($post_ids);
+}
+
+
+/**
+ * Create a post object.
+ */
+function post_create($values = array()) {
+  return entity_get_controller('post')->create($values);
+}
+
+
+/**
+ * Saves a post to the database.
+ *
+ * @param $post
+ *   The post object.
+ */
+function post_save(Post $post) {
+  return $post->save();
+}
+
+
+/**
+ * Saves a post type to the db.
+ */
+function post_type_save(PostType $type) {
+  $type->save();
+}
+
+
+/**
+ * Deletes a post type from the db.
+ */
+function post_type_delete(PostType $type) {
+  $type->delete();
+}
+
+
+/**
+ * URI callback for posts
+ */
+function post_uri(Post $post){
+  return array(
+    'path' => 'post/' . $post->post_id,
+  );
+}
+
+
+/**
+ * Menu title callback for showing individual entities
+ */
+function post_page_title(Post $post){
+  return $post->name;
+}
+
+
+/**
+ * Sets up content to show an individual post
+ * @todo - get rid of drupal_set_title();
+ */
+function post_page_view($post, $view_mode = 'full') {    
+  $controller = entity_get_controller('post');  
+  $content = $controller->view(array($post->post_id => $post));
+  drupal_set_title($post->name);
+  return $content;
+}
+
+
+/**
+ * Implement hook_theme().
+ */
+function post_theme() {
+  return array(
+    'post_add_list' => array(
+      'variables' => array('content' => array()),
+      'file' => 'post.admin.inc',
+    ),
+    'post' => array(
+      'render element' => 'elements',
+      'template' => 'post',
+      'variables' => array('post' => NULL, 'class' => NULL),
+    ),
+   'post_sample_data' => array(
+      'variables' => array('post_sample_data', 'post' => NULL),
+      'template' => 'post-sample-data',
+    ),
+  );
+}
+
+function template_preprocess_post_sample_data(&$vars) {
+  dpm($vars);
+}
+
+function template_preprocess_post(&$vars) {
+  dpm($vars);
+}
+
+
+/**
+ * Implements hook_menu_local_tasks_alter().
+ */
+function post_menu_local_tasks_alter(&$data, $router_item, $root_path) {
+  // Add action link 'admin/structure/posts/add' on 'admin/structure/posts'.
+  if ($root_path == 'admin/content/posts') {
+    $item = menu_get_item('admin/content/posts/add');
+    if ($item['access']) {
+      $data['actions']['output'][] = array(
+        '#theme' => 'menu_local_action',
+        '#link' => $item,
+      );
+    }
+  }
+}
+
+

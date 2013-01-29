@@ -1,0 +1,13 @@
+name = Post
+description = Mostly a learning process creating this module. Inspired by the Model module.
+core = 7.x
+
+dependencies[] = entity
+; For those modals.
+dependencies[] = ctools 
+
+
+files[] = post.admin.inc
+files[] = post.controller.inc
+files[] = post_type.admin.inc
+files[] = post_type.controller.inc
